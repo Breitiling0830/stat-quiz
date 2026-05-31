@@ -149,6 +149,17 @@
   .fig-stem td.rf { text-align: left;  font-family: "SFMono-Regular", Menlo, Consolas, monospace; letter-spacing: 1px; }
   .fig-stem .stem { background: #f1efe8; font-weight: 600; }
   .fig-cap { font-size: 11px; color: #888; text-align: center; margin: 4px 0; }
+  /* ---- preview prev/next nav ---- */
+  .pv-nav { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+  .pv-nav button {
+    flex: 1; padding: 11px; background: transparent; color: #185fa5;
+    border: 1px solid #e8e6df; border-radius: 10px; font-size: 14px;
+    font-family: inherit; cursor: pointer; transition: transform 0.1s;
+  }
+  .pv-nav button:active:not(:disabled) { transform: scale(0.97); }
+  .pv-nav button:disabled { color: #c4c2ba; cursor: default; }
+  .pv-count { font-size: 12px; color: #888; min-width: 56px; text-align: center; }
+  .pv-hint { font-size: 11px; color: #aaa; text-align: center; margin-top: 8px; }
 
   .btn-primary {
     width: 100%; padding: 13px; background: #1f1f1d; color: #ffffff; border: none;
@@ -202,6 +213,10 @@
     .fig-table th { background: #1f1e21; }
     .fig-stem .stem { background: #1f1e21; }
     .fig-cap { color: #999; }
+    .pv-nav button { color: #378add; border-color: #3a3936; }
+    .pv-nav button:disabled { color: #555; }
+    .pv-count { color: #999; }
+    .pv-hint { color: #666; }
   }
 </style>
 </head>
@@ -738,7 +753,8 @@ function renderHome() {
         return;
       }
       let resHtml = '<div class="search-count">\u627E\u5230 ' + matches.length + ' \u984C</div>';
-      matches.slice(0, 50).forEach(function (q) {
+      const shown = matches.slice(0, 50);
+      shown.forEach(function (q) {
         const preview = q.stem.length > 60 ? q.stem.slice(0, 60) + '...' : q.stem;
         const previewClean = preview.replace(/\n/g, ' ');
         resHtml += '<div class="search-item" data-id="' + qid(q) + '">';
@@ -756,7 +772,7 @@ function renderHome() {
         item.addEventListener('click', function () {
           const id = item.dataset.id;
           const q = QUESTIONS.find(function (x) { return qid(x) === id; });
-          if (q) renderPreview(q);
+          if (q) renderPreview(q, { list: shown, idx: shown.indexOf(q) });
         });
       });
     });
@@ -771,7 +787,13 @@ function highlightKeyword(text, kw) {
   return escaped.replace(regex, function (m) { return '<mark>' + m + '</mark>'; });
 }
 
-function renderPreview(q, back) {
+function renderPreview(q, ctx) {
+  ctx = ctx || {};
+  const back = ctx.back;
+  const list = Array.isArray(ctx.list) ? ctx.list : null;
+  const idx = (list && typeof ctx.idx === 'number') ? ctx.idx : -1;
+  const hasNav = !!(list && idx >= 0);
+
   const status = progress.history[qid(q)];
   let statusBadge = '';
   if (status === 'correct') statusBadge = '<span class="badge badge-ok">\u5DF2\u7B54\u5C0D</span>';
@@ -787,6 +809,7 @@ function renderPreview(q, back) {
 
   const backLabel = back ? '\u2190 \u8FD4\u56DE\u6E05\u55AE' : '\u2190 \u8FD4\u56DE\u9996\u9801';
   let html = '<button id="back-btn" class="btn-back">' + backLabel + '</button>';
+  html += '<div id="pv-wrap">';
   html += '<div class="meta-row"><span>\u7B2C ' + q.ch + ' \u7BC7 \u00B7 \u7B2C ' + q.n + ' \u984C \u00B7 ' + chapterName(q) + '</span>' + statusBadge + '</div>';
   html += '<div class="q-card">';
   html += '<div class="q-stem">' + escapeHtml(q.stem).replace(/\n/g, '<br>') + '</div>';
@@ -796,9 +819,45 @@ function renderPreview(q, back) {
   html += escapeHtml(q.exp).replace(/\n/g, '<br>');
   html += '</div>';
   html += '</div>';
+  if (hasNav) {
+    html += '<div class="pv-nav">';
+    html += '<button id="pv-prev"' + (idx <= 0 ? ' disabled' : '') + '>\u2190 \u4E0A\u4E00\u984C</button>';
+    html += '<span class="pv-count">' + (idx + 1) + ' / ' + list.length + '</span>';
+    html += '<button id="pv-next"' + (idx >= list.length - 1 ? ' disabled' : '') + '>\u4E0B\u4E00\u984C \u2192</button>';
+    html += '</div>';
+    html += '<div class="pv-hint">\u5DE6\u53F3\u6ED1\u52D5\u53EF\u5207\u63DB\u4E0A\u4E00\u984C / \u4E0B\u4E00\u984C</div>';
+  }
+  html += '</div>';
 
   document.getElementById('app').innerHTML = html;
   document.getElementById('back-btn').addEventListener('click', back || renderHome);
+
+  if (hasNav) {
+    const go = function (i) {
+      if (i >= 0 && i < list.length) {
+        renderPreview(list[i], { back: back, list: list, idx: i });
+      }
+    };
+    const pp = document.getElementById('pv-prev');
+    if (pp) pp.addEventListener('click', function () { go(idx - 1); });
+    const pn = document.getElementById('pv-next');
+    if (pn) pn.addEventListener('click', function () { go(idx + 1); });
+
+    // 左右滑動切換 (attach to freshly created wrapper, so no listener stacking)
+    const wrap = document.getElementById('pv-wrap');
+    let sx = 0, sy = 0, st = 0;
+    wrap.addEventListener('touchstart', function (e) {
+      const t = e.changedTouches[0];
+      sx = t.clientX; sy = t.clientY; st = Date.now();
+    }, { passive: true });
+    wrap.addEventListener('touchend', function (e) {
+      const t = e.changedTouches[0];
+      const dx = t.clientX - sx, dy = t.clientY - sy, dt = Date.now() - st;
+      if (dt < 800 && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        if (dx < 0) go(idx + 1); else go(idx - 1);
+      }
+    }, { passive: true });
+  }
   window.scrollTo(0, 0);
 }
 
@@ -848,7 +907,7 @@ function renderBrowseList(ch) {
   document.querySelectorAll('.search-item').forEach(function (item) {
     item.addEventListener('click', function () {
       const q = QUESTIONS.find(function (x) { return qid(x) === item.dataset.id; });
-      if (q) renderPreview(q, function () { renderBrowseList(ch); });
+      if (q) renderPreview(q, { back: function () { renderBrowseList(ch); }, list: chQs, idx: chQs.indexOf(q) });
     });
   });
   window.scrollTo(0, 0);
